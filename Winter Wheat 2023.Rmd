@@ -1,0 +1,686 @@
+---
+title: "Winter Wheat (2023) Fertilization Timing Analysis"
+author: "Ahmed Tohameem Alam"
+date: "`r Sys.Date()`"
+email: "ahmedtohameem@gmail.com"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+## Introduction
+
+This document analyzes data from the "StaPraxRegio" Database, focusing on weather, development stages, and attempts_tab. The objectives are to clean, merge, and conduct exploratory data analysis. Visualizations will depict the differences between targeted and actual fertilization dates and the distribution of fertilization dates at specific stages across various regions in Germany.
+
+## Load Required Libraries
+
+I start by loading the necessary R libraries.
+
+```{r load-libraries, message=FALSE, warning=FALSE}
+rm(list = ls())
+setwd("D:/OneDrive - b-tu.de/Msc_Project/codes_TM/Results/WW_2023")
+library(readxl) # read excel files into R.
+library(writexl) # write data frames to excel files.
+library(dplyr) # Includes tools for data manipulation, including filtering, summarizing and transforming data.
+library(lubridate) # Simplifies working with dates and times in R.
+library(knitr) # Facilitates dynamic report generation, combining R code and narrative. 
+library(ggplot2) # Creates elegant data visualizations using the grammar of graphics.
+library(tidyr) # Helps tidy data by reshaping it into a consistent format. 
+library(stringr) # Provides functions for string manipulations and regular expressions. 
+library(patchwork) # Combines multiple ggplot2 plots into a single layout. 
+library(DT) # Creates interactive, dynamic tables in R, typically used in web applications.
+library(readr) # provides functions for reading and writing data files
+library(stringr) # offers tools for string manipulation and regular expression handling.
+library(ggpattern) #extension of ggplot2 that enables the addition of fill patterns to geoms, enhancing the visualization of categorical data.
+library(broom) # used to convert statistical analysis objects into tidy data frames, making it easier to work with and visualize the results.
+```
+
+## 1. Define the file path and filter data
+
+```{r}
+file_path <- "D:/OneDrive - b-tu.de/Msc_Project/StaPrax Regio Database/Final DB/DB_2023_v2.xlsx"
+```
+
+### Read the specific sheets
+
+```{r}
+weather_data <- read_excel(file_path, sheet = "Weather_Attempt_10d")
+development_data <- read_excel(file_path, sheet = "Development Stages")
+attempts_data <- read_excel(file_path, sheet = "Attempts")
+analysis <- read_csv("D:/OneDrive - b-tu.de/Msc_Project/StaPrax Regio Database/Final DB/Analysis.csv")
+```
+
+### Filter attepmts_tab and analysis file to keep only winter wheat and year 2023. 
+
+```{r}
+attempts_data <- attempts_data %>%
+  filter(Crop == "WW")
+# this tab contains the actual fertilization dates. I am filtering it for the crop winter wheat and for one year : 2023
+attempts_data <- attempts_data %>%
+  filter(Year == "2023")
+```
+```{r}
+#This analysis file contains information about field trials that are unsuitable for research as they were compromised. 
+analysis <- analysis %>%
+  filter(CropType_Long == "Winter Soft Wheat")
+analysis <- analysis %>%
+  filter(Year == "2023")
+length(unique(analysis$Attempt))
+field <- unique(analysis$Attempt) # A check to see how many unique Attempt ID we have in current analysis.
+```
+
+
+## 2. Further filtering of the tabs "development_stages" & "attempts"
+
+### Use left_join to retain rows from attempts_data and match where possible
+
+```{r}
+attempts_data_with_ID_WS <- attempts_data %>%
+  left_join(weather_data %>% select(ID_WS, Attempt), by = "Attempt")
+#using the left join function I am bringing the ID_WS column to the attempts_tab, which will later help merge it with the developments_tab
+```
+
+```{r paged.print=TRUE}
+# Rename 'Year' to 'Period' in attempts_data_with_ID_WS, as it is named as Period in the developments_tab
+attempts_data_with_ID_WS <- attempts_data_with_ID_WS %>%
+  rename(Period = Year)
+# Some experiments need to be excluded as they contain errors from the field
+attempts_data_with_ID_WS <- attempts_data_with_ID_WS %>%
+  filter(Attempt %in% field)
+# This step is done so that compromised trials/attempts get excluded. 
+```
+
+
+### Select only the required columns in the 'development_data' dataframe
+
+```{r}
+development_data <- development_data[, c("ID", "ID_WS", "Period", "VB_GL_korrTSum", "BBCH32_mod", "BBCH37_mod", "BBCH49_mod")]
+```
+
+### Filter rows to keep only those with "2023" in the 'Period' column
+
+```{r}
+development_data <- development_data[development_data$Period %in% c("2023"),]
+
+```
+
+### Keep only rows in 'development_data' that have matching 'ID_WS' in 'weather_data'
+
+```{r}
+development_data <- development_data %>%
+  semi_join(weather_data, by = "ID_WS")
+# Because development_tab contains a lot of time periods but my focus is only on winter soft wheat and the year 2023
+# So I do not need all the rows from this tab, only the ones that match this analysis requirements. 
+```
+
+## 3. Merging attempts_tab and developments_tab
+
+### Perform the join using ID_WS
+
+```{r paged.print=TRUE}
+# Step 1: Merge 'attempts_data_with_ID_WS' with 'development_data' based on 'ID_WS'
+combined_data <- attempts_data_with_ID_WS %>%
+  left_join(development_data, by = "ID_WS")
+
+# Step 2: Create a new column 'modeled_T1' in 'combined_data'
+combined_data <- combined_data %>%
+  mutate(modeled_T1 = VB_GL_korrTSum - 15)
+
+# Step 3: Select only the required columns for analysis
+selected_data <- combined_data %>%
+  select(
+    ID, ID_WS, GPS_noerdlB, VB_GL_korrTSum, modeled_T1, BBCH32_mod, BBCH37_mod, BBCH49_mod, 
+    Attempt, Place, Crop, Soil_identification, ID_Nature, BKR_ID, 
+    Nmin_0_30, Nmin_30_60, Nmin_60_90, Nmin_DBE, Date_sowing, N_Level, 
+    Date_T1, Date_T2, Date_T3, Date_T4, Date_T5, Date_harvest
+  )
+ 
+
+```
+
+
+
+
+## 4. Missing value analysis
+
+```{r}
+
+# Count rows with any missing values in combined_data
+rows_with_missing <- selected_data %>%
+  filter(if_any(everything(), is.na)) %>%
+  nrow()
+# View the rows with missing values
+rows_with_missing_data <- selected_data %>%
+  filter(if_any(everything(), is.na))
+
+# Print the rows with missing values
+datatable(rows_with_missing_data, options = list(pagelength = 10, autowidth= T))
+
+
+# Only 4 rows have some values missing. Relatively low amount.  
+```
+
+### Check for duplicates based on 'ID_WS' columns
+
+```{r}
+# Identify all rows with duplicate ID_WS
+duplicates_by_ID_WS <- selected_data %>%
+  group_by(ID_WS) %>%
+  filter(n() > 1) %>%
+  ungroup()  # Ungroup for further operations if needed
+
+datatable(duplicates_by_ID_WS, options = list(pagelength = 10, autowidth= T))
+# We have few Attempt with same ID_WS but they have different Attempt ID meaning they are not exactly duplicates.  
+```
+
+
+# 5. Fertilization date deviation check of Winter wheat
+
+### Converting to DOY
+
+```{r}
+# Convert the date columns to day of the year (1-365)
+filtered_data <- selected_data %>%
+  mutate(Day_sowing = yday(as.Date(Date_sowing)),
+         Day_T1 = yday(as.Date(Date_T1)),
+         Day_T2 = yday(as.Date(Date_T2)),
+         Day_T3 = yday(as.Date(Date_T3)),
+         Day_T4 = yday(as.Date(Date_T4)),
+         Day_T5 = yday(as.Date(Date_T5)),
+         Day_harvest = yday(as.Date(Date_harvest)))
+# This conversion is necessary to calculate the deviation of days
+```
+
+
+### Calculate the differences between day columns and fractional columns (modelled DOY's have fractional values)
+
+```{r}
+
+
+# Create a new column to store median of actual T4 timings
+filtered_data <- filtered_data %>%
+  mutate(medianT4 = median(Day_T4, na.rm = TRUE))
+# Modeled T4 dates vary significantly so median is being used for T4 fertilization stage.   
+# Calculate differences and add them as new columns
+filtered_data <- filtered_data %>%
+  mutate(
+         Diff_T1_model  = Day_T1 - modeled_T1,
+         Diff_T1_T2     = Day_T2 - Day_T1, # Difference between Actual T2 and Actual T1 (should be at least 7)
+         Diff_T2_VB_GL  = Day_T2 - VB_GL_korrTSum,
+         Diff_T3_BBCH32 = Day_T3 - BBCH32_mod,
+         Diff_T4_BBCH37 = Day_T4 - medianT4, # Using median for Targeted T4, as most modeled dates fail here.
+         Diff_T5_BBCH49 = Day_T5 - BBCH49_mod)
+```
+
+
+### Check the new filter data
+
+```{r}
+datatable(filtered_data, options = list(pagelength = 10, autowidth = T))
+
+```
+
+
+### Deviance of the two fertilization dates
+
+```{r}
+
+# Gather difference columns into long format for easier plotting
+plot_data <- filtered_data %>%
+  select(Attempt, Diff_T2_VB_GL, Diff_T1_T2, Diff_T1_model, Diff_T3_BBCH32, Diff_T4_BBCH37, Diff_T5_BBCH49) %>%
+  pivot_longer(cols = c(Diff_T2_VB_GL, Diff_T1_T2, Diff_T1_model, Diff_T3_BBCH32, Diff_T4_BBCH37, Diff_T5_BBCH49),
+               names_to = "Difference_Variable", values_to = "Difference_Value") %>%
+  drop_na()
+
+# Create color categories based on specified day ranges
+plot_data <- plot_data %>%
+  mutate(
+    Color_Category = case_when(
+      abs(Difference_Value) <= 10 ~ "Deviation below or equal to 10 days",   # Grey
+      abs(Difference_Value) >= 11 & abs(Difference_Value) <= 19 ~ "Deviation between 11 and 19 days",  # Pink
+      abs(Difference_Value) >= 20 ~ "Deviation of 20 days or more"  # Dark Red
+    )
+  )
+
+# Wrap long Attempt labels (e.g., after every 10 characters)
+plot_data$Attempt <- str_wrap(plot_data$Attempt, width = 10)
+
+# Function to create plots for each difference variable with specified color categories
+create_plot <- function(data, variable, title) {
+  ggplot(data %>% filter(Difference_Variable == variable), 
+         aes(x = Attempt, y = Difference_Value, fill = Color_Category)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    scale_fill_manual(values = c(
+      "Deviation below or equal to 10 days" = "gray",
+      "Deviation between 11 and 19 days" = "pink",
+      "Deviation of 20 days or more" = "darkred"
+    )) + 
+    theme_minimal() +
+    labs(title = title,
+         x = "Attempts",
+         y = "Difference Value") +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 8))
+}
+
+# List of variables and titles for the plots
+variables <- c("Diff_T2_VB_GL", "Diff_T3_BBCH32", "Diff_T4_BBCH37", "Diff_T5_BBCH49")
+titles <- c("Fertilization Date Deviations: Difference of Targetted & actual T2",
+            "Fertilization Date Deviations: Difference of Targetted & actual T3",
+            "Fertilization Date Deviations: Difference of Targetted & actual T4",
+            "Fertilization Date Deviations: Difference of Targetted & actual T5"
+            )
+
+# Generate and store each plot in a list
+plots <- lapply(seq_along(variables), function(i) {
+  create_plot(plot_data, variables[i], titles[i])
+})
+
+# Print all plots
+for (plot in plots) {
+  print(plot)
+}
+```
+
+
+### Plotting Modelled T1 and Actual T1 timings
+```{r}
+
+
+# Prepare the data
+plot_data_t1 <- filtered_data %>%
+  filter(!is.na(Diff_T1_model) & !is.na(Diff_T1_T2)) %>%
+  select(Attempt, Diff_T1_model, Diff_T1_T2) %>%
+  mutate(
+    Color_Category = case_when(
+      Diff_T1_model > 19 ~ "Deviation of more than 19 days",        
+      Diff_T1_model >= 10 & Diff_T1_model <= 19 ~ "Deviation of +10 to +19 days",  
+      TRUE ~ "Other deviations"                                     
+    ),
+    Pattern = if_else(Diff_T1_T2 < 7, "Difference between Actual T2 & Actual T1 < 7d", "Difference between Actual T2 & Actual T1 > 7d")
+  )
+
+# Wrap long Attempt labels
+plot_data_t1$Attempt <- str_wrap(plot_data_t1$Attempt, width = 10)
+
+# Create the corrected plot
+ggplot(plot_data_t1, aes(x = Attempt, y = Diff_T1_model)) +
+  geom_bar_pattern(
+    aes(fill = Color_Category, pattern = Pattern),
+    stat = "identity", position = "dodge",
+    pattern_fill = "black", pattern_density = 0.1, pattern_spacing = 0.05
+  ) +
+  scale_fill_manual(
+    name = "Deviation Category",
+    values = c(
+      "Deviation of more than 19 days" = "darkred",
+      "Deviation of +10 to +19 days" = "pink",
+      "Other deviations" = "gray"
+    )
+  ) +
+  scale_pattern_manual(
+    name = "Pattern",
+    values = c(
+      "Difference between Actual T2 & Actual T1 < 7d" = "stripe",
+      "Difference between Actual T2 & Actual T1 > 7d" = "none"
+    )
+  ) +
+  guides(
+    fill = guide_legend(override.aes = list(pattern = "none")),  # Ensures colors appear solid
+    pattern = guide_legend(order = 2)  # Keeps pattern legend separate
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Fertilization Date Deviations: Targeted & Actual T1",
+    x = "Attempts",
+    y = "Difference Value for T1"
+  ) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 8))
+
+```
+
+
+## Spatial Distribuition of fertilization 
+
+### Scatter Plot with Date_sowing
+
+```{r}
+
+# Step 1: Ensure Date columns are in Date format and set specific year for model dates
+selected_data <- selected_data %>%
+  mutate(
+    Date_T1 = as.Date(Date_T1, format = "%Y-%m-%d"),
+    Date_T2 = as.Date(Date_T2, format = "%Y-%m-%d"),
+    Date_T3 = as.Date(Date_T3, format = "%Y-%m-%d"),
+    Date_T4 = as.Date(Date_T4, format = "%Y-%m-%d"),
+    Date_T5 = as.Date(Date_T5, format = "%Y-%m-%d"),
+    Model_Date_T1 = as.Date(modeled_T1, format = "%Y-%m-%d"),
+    Model_Date_T2 = as.Date(VB_GL_korrTSum, format = "%Y-%m-%d"),
+    Model_Date_T3 = as.Date(BBCH32_mod, format = "%Y-%m-%d"),
+    Model_Date_T4 = as.Date(BBCH37_mod, format = "%Y-%m-%d"),
+    Model_Date_T5 = as.Date(BBCH49_mod, format = "%Y-%m-%d"),
+    Date_sowing = as.Date(Date_sowing, format = "%Y-%m-%d")
+  ) %>%
+  mutate(across(starts_with("Model_Date"), ~ `year<-`(.x, 2023)))
+
+# Step 2: Drop NA values for relevant columns
+selected_data <- selected_data %>%
+  drop_na(Date_T1, Date_T2, Date_T3, Date_T4, Date_T5, Place, GPS_noerdlB, Model_Date_T1, Model_Date_T2, Model_Date_T3, Model_Date_T4, Model_Date_T5, Date_sowing)
+
+# Step 3: Arrange dataframe by increasing GPS_noerdlB (latitude)
+selected_data <- selected_data %>%
+  arrange(GPS_noerdlB)
+
+# Step 4: Gather both actual and model dates into long format for plotting, excluding Date_sowing
+spatial_plot_data <- selected_data %>%
+  select(Place, GPS_noerdlB, Date_T1, Date_T2, Date_T3, Date_T4, Date_T5,
+         Model_Date_T1, Model_Date_T2, Model_Date_T3, Model_Date_T4, Model_Date_T5) %>%
+  pivot_longer(cols = c(Date_T1, Date_T2, Date_T3, Date_T4, Date_T5, 
+                        Model_Date_T1, Model_Date_T2, Model_Date_T3, Model_Date_T4, Model_Date_T5),
+               names_to = "Fertilization_Stage", values_to = "Date_Value") %>%
+  mutate(
+    Type = ifelse(str_detect(Fertilization_Stage, "Model_"), "Model", "Actual"),  # Mark as Model or Actual
+    Fertilization_Stage = str_replace(Fertilization_Stage, "Model_", "")  # Normalize stage names for grouping
+  )
+
+# Step 5: Convert Place to factor ordered by latitude for consistent plotting
+spatial_plot_data <- spatial_plot_data %>%
+  mutate(Place = factor(Place, levels = unique(selected_data$Place[order(selected_data$GPS_noerdlB)])))
+
+# Step 6: Get unique fertilization stages
+fertilization_stages <- unique(spatial_plot_data$Fertilization_Stage)
+
+# Step 7: Loop through each fertilization stage and plot with ordered Place by latitude
+for (stage in fertilization_stages) {
+  # Filter data for the current fertilization stage
+  stage_data <- spatial_plot_data %>% filter(Fertilization_Stage == stage)
+  
+  # Plot for the current stage with Actual, Model, and Sowing dates
+  plot <- ggplot(stage_data, aes(x = Place, y = Date_Value, color = Type, shape = Type)) +
+    geom_point(size = 3) +
+    geom_point(data = selected_data, aes(x = Place, y = Date_sowing, color = "Sowing", shape = "Sowing"), size = 3) +  # Add Date_sowing with specific color and shape
+    theme_minimal() +
+    labs(title = paste("Fertilization Timing -", stage, "by Place"),
+         x = "Place",
+         y = "Date") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    scale_color_manual(values = c("Actual" = "black", "Model" = "blue", "Sowing" = "orange")) +  # Include Sowing in color scale
+    scale_shape_manual(values = c("Actual" = 16, "Model" = 17, "Sowing" = 18))  # Include Sowing in shape scale
+  
+  # Print plot
+  print(plot)
+}
+
+
+
+```
+
+
+### Scatter plot without Date_sowing
+
+```{r}
+
+# Step 5: Convert Place to factor ordered by latitude for consistent plotting
+spatial_plot_data <- spatial_plot_data %>%
+  mutate(Place = factor(Place, levels = unique(selected_data$Place[order(selected_data$GPS_noerdlB)])))
+
+# Step 6: Get unique fertilization stages
+fertilization_stages <- unique(spatial_plot_data$Fertilization_Stage)
+
+# Step 7: Loop through each fertilization stage and plot with ordered Place by latitude
+for (stage in fertilization_stages) {
+  # Filter data for the current stage
+  stage_data <- spatial_plot_data %>% filter(Fertilization_Stage == stage)
+  
+  # Create plot for the current stage with Actual and Model dates
+  plot <- ggplot(stage_data, aes(x = Place, y = Date_Value, color = Type, shape = Type)) +
+    geom_point(size = 3) +
+    theme_minimal() +
+    labs(title = paste("Fertilization Timing -", stage, "by Place"),
+         x = "Place",
+         y = "Fertilization Date") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+    scale_color_manual(values = c("Actual" = "black", "Model" = "blue")) +  # Different colors for Actual and Model
+    scale_shape_manual(values = c("Actual" = 16, "Model" = 17))  # Different shapes for Actual and Model
+  
+  # Print plot
+  print(plot)
+}
+
+
+```
+
+
+### Fertilization timings for different latitudes (Places in Germany)
+```{r}
+
+# Step 1: Drop NA and arrange by latitude
+latitude_plot_data <- filtered_data %>%
+  drop_na(Day_sowing, Day_T1, Day_T2, Day_T3, Day_T4, Day_T5, Day_harvest, Place, GPS_noerdlB, VB_GL_korrTSum, modeled_T1, BBCH32_mod, BBCH37_mod, BBCH49_mod) %>%
+  arrange(GPS_noerdlB)
+
+# Step 2: Rename columns for clarity
+latitude_plot_data <- latitude_plot_data %>%
+  rename(
+    modeled_T2 = VB_GL_korrTSum,
+    modeled_T3 = BBCH32_mod,
+    modeled_T4 = BBCH37_mod,
+    modeled_T5 = BBCH49_mod
+  )
+
+# Step 3: Create a comparison-ready dataset with pairs of actual and modeled columns
+comparison_data <- latitude_plot_data %>%
+  select(Place, GPS_noerdlB, Day_T1, modeled_T1, Day_T2, modeled_T2, Day_T3, modeled_T3, 
+         Day_T4, modeled_T4, Day_T5, modeled_T5) %>%
+  pivot_longer(
+    cols = c(Day_T1, modeled_T1, Day_T2, modeled_T2, Day_T3, modeled_T3, Day_T4, modeled_T4, Day_T5, modeled_T5),
+    names_to = "Stage_Type", 
+    values_to = "Day_Value"
+  ) %>%
+  mutate(
+    Fertilization_Stage = case_when(
+      str_detect(Stage_Type, "T1") ~ "T1",
+      str_detect(Stage_Type, "T2") ~ "T2",
+      str_detect(Stage_Type, "T3") ~ "T3",
+      str_detect(Stage_Type, "T4") ~ "T4",
+      str_detect(Stage_Type, "T5") ~ "T5"
+    ),
+    Type = ifelse(str_detect(Stage_Type, "modeled"), "Modeled", "Actual")
+  )
+
+# Step 4: Get unique fertilization stages
+fertilization_stages <- unique(comparison_data$Fertilization_Stage)
+
+# Step 5: Loop through each fertilization stage and create comparison plots
+for (stage in fertilization_stages) {
+  # Filter data for the current stage
+  stage_data <- comparison_data %>% filter(Fertilization_Stage == stage)
+  
+  # Create comparison plot for the current stage
+  plot <- ggplot(stage_data, aes(x = GPS_noerdlB, y = Day_Value, color = Type, shape = Type)) +
+    geom_point(size = 3) +
+    # Connect points only within the same Type group
+    geom_line(aes(group = interaction(Place, Type)), linetype = "dashed", alpha = 0.5) +
+    theme_minimal() +
+    labs(title = paste("Comparison of Actual and Modeled Fertilisation Timing -", stage),
+         x = "Latitude",
+         y = "Fertilization Date") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+    scale_x_continuous(
+      limits = c(48, max(stage_data$GPS_noerdlB, na.rm = TRUE)),
+      breaks = seq(48, max(stage_data$GPS_noerdlB, na.rm = TRUE), by = 0.5)
+    ) +
+    scale_color_manual(values = c("Actual" = "black", "Modeled" = "blue")) +  # Color-coded comparison
+    scale_shape_manual(values = c("Actual" = 16, "Modeled" = 17))  # Shape-coded comparison
+  
+  # Print plot
+  print(plot)
+}
+
+
+```
+
+
+### Fertilization timing distribution summary statistics
+```{r}
+
+
+# Calculate mean
+mean_stats <- latitude_plot_data %>%
+  summarise(across(c(Day_sowing, Day_T1, Day_T2, Day_T3, Day_T4, Day_T5, 
+                     Day_harvest, GPS_noerdlB, modeled_T1, modeled_T2, 
+                     modeled_T3, modeled_T4, modeled_T5), 
+                   ~mean(., na.rm = TRUE)))
+
+# Calculate median
+median_stats <- latitude_plot_data %>%
+  summarise(across(c(Day_sowing, Day_T1, Day_T2, Day_T3, Day_T4, Day_T5, 
+                     Day_harvest, GPS_noerdlB, modeled_T1, modeled_T2, 
+                     modeled_T3, modeled_T4, modeled_T5), 
+                   ~median(., na.rm = TRUE)))
+
+# Calculate minimum
+min_stats <- latitude_plot_data %>%
+  summarise(across(c(Day_sowing, Day_T1, Day_T2, Day_T3, Day_T4, Day_T5, 
+                     Day_harvest, GPS_noerdlB, modeled_T1, modeled_T2, 
+                     modeled_T3, modeled_T4, modeled_T5), 
+                   ~min(., na.rm = TRUE)))
+
+# Calculate maximum
+max_stats <- latitude_plot_data %>%
+  summarise(across(c(Day_sowing, Day_T1, Day_T2, Day_T3, Day_T4, Day_T5, 
+                     Day_harvest, GPS_noerdlB, modeled_T1, modeled_T2, 
+                     modeled_T3, modeled_T4, modeled_T5), 
+                   ~max(., na.rm = TRUE)))
+
+# Calculate standard deviation
+sd_stats <- latitude_plot_data %>%
+  summarise(across(c(Day_sowing, Day_T1, Day_T2, Day_T3, Day_T4, Day_T5, 
+                     Day_harvest, GPS_noerdlB, modeled_T1, modeled_T2, 
+                     modeled_T3, modeled_T4, modeled_T5), 
+                   ~sd(., na.rm = TRUE)))
+
+# Combine the summary statistics into a single data frame
+summary_stats <- bind_rows(
+  mean_stats %>% mutate(Statistic = "Mean"),
+  median_stats %>% mutate(Statistic = "Median"),
+  min_stats %>% mutate(Statistic = "Min"),
+  max_stats %>% mutate(Statistic = "Max"),
+  sd_stats %>% mutate(Statistic = "SD")
+) %>% pivot_longer(-Statistic, names_to = "Variable", values_to = "Value")
+
+# Display the summary statistics using `DT::datatable`
+datatable(summary_stats, caption = "Summary Statistics for Individual Fertilisation Stage")
+
+```
+
+
+### Regression analysis for latitude
+```{r}
+
+# Linear regression for Day_T1
+model_T1 <- lm(Day_T1 ~ GPS_noerdlB, data = latitude_plot_data)
+summary_T1 <- tidy(model_T1)
+glance_T1 <- glance(model_T1)
+
+# Linear regression for Day_T2
+model_T2 <- lm(Day_T2 ~ GPS_noerdlB, data = latitude_plot_data)
+summary_T2 <- tidy(model_T2)
+glance_T2 <- glance(model_T2)
+
+# Linear regression for Day_T3
+model_T3 <- lm(Day_T3 ~ GPS_noerdlB, data = latitude_plot_data)
+summary_T3 <- tidy(model_T3)
+glance_T3 <- glance(model_T3)
+
+# Linear regression for Day_T4
+model_T4 <- lm(Day_T4 ~ GPS_noerdlB, data = latitude_plot_data)
+summary_T4 <- tidy(model_T4)
+glance_T4 <- glance(model_T4)
+
+# Linear regression for Day_T5
+model_T5 <- lm(Day_T5 ~ GPS_noerdlB, data = latitude_plot_data)
+summary_T5 <- tidy(model_T5)
+glance_T5 <- glance(model_T5)
+
+# Combine necessary components into a single data frame
+regression_summaries <- bind_rows(
+  summary_T1 %>% mutate(Day = "Day_T1", R_squared = glance_T1$r.squared),
+  summary_T2 %>% mutate(Day = "Day_T2", R_squared = glance_T2$r.squared),
+  summary_T3 %>% mutate(Day = "Day_T3", R_squared = glance_T3$r.squared),
+  summary_T4 %>% mutate(Day = "Day_T4", R_squared = glance_T4$r.squared),
+  summary_T5 %>% mutate(Day = "Day_T5", R_squared = glance_T5$r.squared)
+) %>%
+  filter(term == "(Intercept)" | term == "GPS_noerdlB") %>%
+  select(Day, term, estimate, std.error, statistic, p.value,R_squared)
+
+# Display the regression summaries using `DT::datatable`
+datatable(regression_summaries, 
+          caption = "Linear Regression Summaries for Each Fertilisation Stage",
+          options = list(pageLength = 10, scrollX = TRUE))
+
+
+```
+### Summary statictics of the deviance of fertilisation dates
+```{r}
+
+# Calculate mean
+mean_stats <- latitude_plot_data %>%
+  summarise(across(c(Diff_T1_model, Diff_T2_VB_GL, Diff_T3_BBCH32, Diff_T4_BBCH37, Diff_T5_BBCH49), 
+                   ~mean(., na.rm = TRUE))) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Mean")
+
+# Calculate median
+median_stats <- latitude_plot_data %>%
+  summarise(across(c(Diff_T1_model, Diff_T2_VB_GL, Diff_T3_BBCH32, Diff_T4_BBCH37, Diff_T5_BBCH49), 
+                   ~median(., na.rm = TRUE))) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Median")
+
+# Calculate minimum
+min_stats <- latitude_plot_data %>%
+  summarise(across(c(Diff_T1_model, Diff_T2_VB_GL, Diff_T3_BBCH32, Diff_T4_BBCH37, Diff_T5_BBCH49), 
+                   ~min(., na.rm = TRUE))) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Min")
+
+# Calculate maximum
+max_stats <- latitude_plot_data %>%
+  summarise(across(c(Diff_T1_model, Diff_T2_VB_GL, Diff_T3_BBCH32, Diff_T4_BBCH37, Diff_T5_BBCH49), 
+                   ~max(., na.rm = TRUE))) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "Max")
+
+# Calculate standard deviation
+sd_stats <- latitude_plot_data %>%
+  summarise(across(c(Diff_T1_model, Diff_T2_VB_GL, Diff_T3_BBCH32, Diff_T4_BBCH37, Diff_T5_BBCH49), 
+                   ~sd(., na.rm = TRUE))) %>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "SD")
+
+# Combine the summary statistics into a single data frame using `Reduce`
+summary_stats <- Reduce(function(x, y) merge(x, y, by = "Variable"), 
+                        list(mean_stats, median_stats, min_stats, max_stats, sd_stats))
+
+# Display the summary statistics using `DT::datatable`
+datatable(summary_stats, 
+          caption = "Summary Statistics for Fertilisation Day Deviance",
+          options = list(pageLength = 10, scrollX = TRUE))
+
+
+```
+### Violin plot 
+```{r}
+ggplot(spatial_plot_data, aes(x = Fertilization_Stage, y = Date_Value)) +
+  geom_violin(aes(fill = Fertilization_Stage), alpha = 0.6, width = 0.8, show.legend = FALSE) +  # Violin plot for T1 to T5
+  geom_jitter(color = "black", width = 0.2, height = 0, size = 2, alpha = 0.8) +  # Jittered ponits for place
+  theme_minimal() +
+  labs(title = "Actual Fertilization Date Distribution by Stage and Place",
+       x = "Fertilization Stage",
+       y = "Fertilization Date") +
+  theme(axis.text.x = element_text(angle = 0, hjust = 1),  # Adjust x-axis label position
+        legend.position = "right")  # Keep legend on the right if additional legends exist
+
+
+```
